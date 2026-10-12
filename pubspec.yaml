@@ -1,0 +1,42 @@
+name: hisab_book
+description: "HisabBook - Personal Finance Manager"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  http: ^1.6.0
+  flutter_secure_storage: ^11.2.0
+  sqflite: ^2.4.4+1
+  path: ^1.9.1
+  shared_preferences: ^2.5.6
+
+  flutter_local_notifications: ^20.1.0
+  flutter_timezone: ^5.1.1
+  timezone: ^0.10.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+  flutter_native_splash: ^2.4.8
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/branding/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/branding/hisabbook_app_icon.png"

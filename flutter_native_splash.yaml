@@ -1,0 +1,15 @@
+flutter_native_splash:
+  color: "#F8F8F8"
+  image: assets/branding/hisabbook_splash_icon.png
+
+  android: true
+  ios: false
+  web: false
+
+  android_gravity: center
+  fullscreen: false
+
+  android_12:
+    color: "#F8F8F8"
+    image: assets/branding/hisabbook_splash_icon.png
+    icon_background_color: "#F8F8F8"
