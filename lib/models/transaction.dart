@@ -6,6 +6,7 @@ class Transaction {
   final DateTime date;
   final bool isIncome;
   final String paymentMode;
+  final bool isUdhaar;
 
   const Transaction({
     this.id,
@@ -15,5 +16,6 @@ class Transaction {
     required this.date,
     this.isIncome = false,
     this.paymentMode = 'Cash',
+    this.isUdhaar = false,
   });
 }

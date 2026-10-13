@@ -1,19 +1,16 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-
 import '../../services/database_service.dart';
 import '../../services/notification_service.dart';
 import '../budgets/budgets_reports_screen.dart';
 import '../dashboard/dashboard_screen.dart';
 import '../savings/savings_hub_screen.dart';
 import '../transactions/transactions_screen.dart';
+import '../udhaar/udhaar_screen.dart';
 
 class AppShell extends StatefulWidget {
   final VoidCallback onToggleTheme;
-
   const AppShell({super.key, required this.onToggleTheme});
-
   @override
   State<AppShell> createState() => _AppShellState();
 }
@@ -21,9 +18,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   int _refreshVersion = 0;
-
   Timer? _monthTimer;
-
   static const List<_MenuItem> _items = [
     _MenuItem('Dashboard', Icons.space_dashboard_rounded),
     _MenuItem('Transactions', Icons.receipt_long_rounded),
@@ -33,13 +28,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _MenuItem('Split Expenses', Icons.call_split_rounded),
     _MenuItem('Settings', Icons.settings_rounded),
   ];
-
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addObserver(this);
-
     unawaited(_initialiseAppServices());
     _scheduleNextMonthCheck();
   }
@@ -50,7 +42,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     } catch (error) {
       debugPrint('Initial database check failed: $error');
     }
-
     try {
       await NotificationService.instance.initializeAndScheduleDailyReminder();
     } catch (error) {
@@ -76,9 +67,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   Future<void> _checkRollover({required bool refreshPage}) async {
     try {
       await DatabaseService.instance.initialize();
-
       if (!mounted || !refreshPage) return;
-
       setState(() {
         _refreshVersion++;
       });
@@ -89,14 +78,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   void _scheduleNextMonthCheck() {
     _monthTimer?.cancel();
-
     final now = DateTime.now();
     final nextMonthStart = DateTime(now.year, now.month + 1, 1);
     final delay = nextMonthStart.difference(now) + const Duration(seconds: 1);
-
     _monthTimer = Timer(delay, () async {
       await _checkRollover(refreshPage: true);
-
       if (mounted) {
         _scheduleNextMonthCheck();
       }
@@ -107,13 +93,11 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     setState(() {
       _selectedIndex = index;
     });
-
     Navigator.of(context).pop();
   }
 
   void _openPage(int index) {
     if (!mounted) return;
-
     setState(() {
       _selectedIndex = index;
     });
@@ -124,7 +108,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
-
     return Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
       appBar: AppBar(
@@ -227,7 +210,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                   itemBuilder: (context, index) {
                     final item = _items[index];
                     final isSelected = index == _selectedIndex;
-
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
                       child: ListTile(
@@ -294,6 +276,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           ? BudgetsReportsScreen(key: ValueKey('budgets-$_refreshVersion'))
           : _selectedIndex == 3
           ? SavingsHubScreen(key: ValueKey('savings-$_refreshVersion'))
+          : _selectedIndex == 4
+          ? UdhaarScreen(key: ValueKey('udhaar-$_refreshVersion'))
           : _PlaceholderScreen(
               title: _items[_selectedIndex].title,
               icon: _items[_selectedIndex].icon,
@@ -305,20 +289,16 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 class _MenuItem {
   final String title;
   final IconData icon;
-
   const _MenuItem(this.title, this.icon);
 }
 
 class _PlaceholderScreen extends StatelessWidget {
   final String title;
   final IconData icon;
-
   const _PlaceholderScreen({required this.title, required this.icon});
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(28),

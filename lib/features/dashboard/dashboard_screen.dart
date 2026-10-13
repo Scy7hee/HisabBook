@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-
-import '../../models/savings_entry.dart';
 import '../../models/transaction.dart';
 import '../../services/database_service.dart';
 import '../categories/category_manager_dialog.dart';
@@ -13,97 +11,52 @@ const Color appRed = Color(0xFFFF8793);
 
 class DashboardScreen extends StatefulWidget {
   final VoidCallback? onSeeAllTransactions;
-
   const DashboardScreen({super.key, this.onSeeAllTransactions});
-
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
   final DatabaseService _database = DatabaseService.instance;
-
   final List<String> categories = [];
   final List<Transaction> transactions = [];
-  final List<SavingsEntry> _savingsEntries = [];
-
   bool _isLoading = true;
   String? _loadError;
-
   Color get _mutedColor => Theme.of(context).brightness == Brightness.dark
       ? appMuted
       : const Color(0xFF64748B);
-
-  List<Transaction> get _currentMonthTransactions {
-    final now = DateTime.now();
-
-    return transactions.where((transaction) {
-      return transaction.date.year == now.year &&
-          transaction.date.month == now.month;
-    }).toList();
-  }
-
-  double get totalIncome => _currentMonthTransactions
-      .where((transaction) => transaction.isIncome)
-      .fold(0.0, (sum, transaction) => sum + transaction.amount);
-
-  // Transfers to savings are shown in Transactions but are not
-  // treated as consumption in the dashboard's spending summary.
-  double get totalExpenses => _currentMonthTransactions
-      .where(
-        (transaction) =>
-            !transaction.isIncome &&
-            transaction.category.toLowerCase() != 'savings',
-      )
-      .fold(0.0, (sum, transaction) => sum + transaction.amount);
-
-  double _legacyTransfersFor(String paymentMode) {
-    final now = DateTime.now();
-
-    return _savingsEntries
-        .where(
-          (entry) =>
-              entry.entryType == 'transfer' &&
-              entry.transactionId == null &&
-              entry.paymentMode == paymentMode &&
-              entry.month == now.month &&
-              entry.year == now.year,
-        )
-        .fold(0.0, (sum, entry) => sum + entry.amount);
-  }
-
-  double _availableFor(String paymentMode) {
-    final monthlyNet = _currentMonthTransactions
-        .where((transaction) => transaction.paymentMode == paymentMode)
-        .fold(
-          0.0,
-          (sum, transaction) =>
-              sum +
-              (transaction.isIncome ? transaction.amount : -transaction.amount),
-        );
-
-    // Linked savings transfers already reduce monthlyNet through
-    // their corresponding Savings-category transaction. Only older,
-    // unlinked transfer entries require a separate deduction.
-    return monthlyNet - _legacyTransfersFor(paymentMode);
-  }
-
-  double get cashBalance => _availableFor('Cash');
-
-  double get onlineBalance => _availableFor('Online');
-
-  double get balance => cashBalance + onlineBalance;
-
+  // Udhaar affects the actual wallet balance, but it is not ordinary
+  // income or spending and should not inflate these two summaries.
+  double get totalIncome => transactions
+      .where((t) => t.isIncome && !t.isUdhaar)
+      .fold(0.0, (sum, t) => sum + t.amount);
+  double get totalExpenses => transactions
+      .where((t) => !t.isIncome && !t.isUdhaar)
+      .fold(0.0, (sum, t) => sum + t.amount);
+  double get balance => transactions.fold(
+    0.0,
+    (sum, t) => sum + (t.isIncome ? t.amount : -t.amount),
+  );
+  double get cashBalance => transactions.fold(
+    0.0,
+    (sum, t) =>
+        sum +
+        (t.paymentMode == 'Cash' ? (t.isIncome ? t.amount : -t.amount) : 0),
+  );
+  double get onlineBalance => transactions.fold(
+    0.0,
+    (sum, t) =>
+        sum +
+        (t.paymentMode == 'Online' ? (t.isIncome ? t.amount : -t.amount) : 0),
+  );
   String money(double amount) {
     if (amount < 0) {
       return '-₹ ${(-amount).toStringAsFixed(2)}';
     }
-
     return '₹ ${amount.toStringAsFixed(2)}';
   }
 
   String formatDate(DateTime date) => '${date.day}/${date.month}/${date.year}';
-
   @override
   void initState() {
     super.initState();
@@ -117,37 +70,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _loadError = null;
       });
     }
-
     try {
       await _database.initialize();
-
       final savedCategories = await _database.getCategories();
       final savedTransactions = await _database.getTransactions();
-      final savedSavingsEntries = await _database.getSavingsEntries();
-
       if (!mounted) return;
-
       setState(() {
         categories
           ..clear()
           ..addAll(savedCategories);
-
         transactions
           ..clear()
           ..addAll(savedTransactions);
-
-        _savingsEntries
-          ..clear()
-          ..addAll(savedSavingsEntries);
-
         _isLoading = false;
         _loadError = null;
       });
     } catch (error) {
       debugPrint('Failed to load HisabBook data: $error');
-
       if (!mounted) return;
-
       setState(() {
         _isLoading = false;
         _loadError = 'Could not load saved data. Please try again.';
@@ -157,7 +97,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
@@ -165,7 +104,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> openCategoryManager() async {
     final originalCategories = List<String>.from(categories);
-
     final updatedCategories = await showDialog<List<String>>(
       context: context,
       builder: (_) => CategoryManagerDialog(
@@ -173,20 +111,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         transactions: List<Transaction>.from(transactions),
       ),
     );
-
     if (updatedCategories == null || !mounted) return;
-
     try {
       for (final category in updatedCategories) {
         if (!originalCategories.contains(category)) {
           await _database.addCategory(category);
         }
       }
-
       for (final category in originalCategories) {
         if (!updatedCategories.contains(category)) {
           final deleted = await _database.deleteCategory(category);
-
           if (!deleted) {
             _showMessage(
               '$category is used by a transaction '
@@ -195,7 +129,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
         }
       }
-
       await _loadData();
     } catch (error) {
       debugPrint('Category update failed: $error');
@@ -206,10 +139,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _addTransaction({required bool isIncome}) async {
     if (!isIncome && categories.isEmpty) {
       await openCategoryManager();
-
       if (!mounted || categories.isEmpty) return;
     }
-
     final result = await showDialog<Transaction>(
       context: context,
       builder: (_) => _TransactionFormDialog(
@@ -218,13 +149,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onManageCategories: openCategoryManager,
       ),
     );
-
     if (result == null || !mounted) return;
-
     try {
       await _database.insertTransaction(result);
       await _loadData();
-
       _showMessage(
         isIncome ? 'Income saved successfully.' : 'Expense saved successfully.',
       );
@@ -235,15 +163,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> addExpense() => _addTransaction(isIncome: false);
-
   Future<void> addIncome() => _addTransaction(isIncome: true);
-
   Future<void> editTransaction(Transaction transaction) async {
     if (transaction.id == null) {
       _showMessage('This transaction has no database ID.');
       return;
     }
-
     final updated = await showDialog<Transaction>(
       context: context,
       builder: (_) => _TransactionFormDialog(
@@ -252,16 +177,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onManageCategories: openCategoryManager,
       ),
     );
-
     if (updated == null || !mounted) return;
-
     try {
       await _database.updateTransaction(updated);
       await _loadData();
       _showMessage('Transaction updated successfully.');
     } catch (error) {
       debugPrint('Updating transaction failed: $error');
-      _showMessage(_friendlyTransactionError(error));
+      _showMessage('Could not update the transaction.');
     }
   }
 
@@ -270,17 +193,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _showMessage('This transaction has no database ID.');
       return;
     }
-
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Delete transaction?'),
         content: Text(
-          transaction.category.toLowerCase() == 'savings'
-              ? 'This is linked to a savings entry. Deleting it will '
-                    'also remove the linked savings record and adjust '
-                    'the associated goal, if any.'
-              : 'Are you sure you want to delete "${transaction.title}"?',
+          'Are you sure you want to delete "${transaction.title}"?',
         ),
         actions: [
           TextButton(
@@ -294,33 +212,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
-
     if (confirm != true || !mounted) return;
-
     try {
       await _database.deleteTransaction(transaction.id!);
       await _loadData();
       _showMessage('Transaction deleted.');
     } catch (error) {
       debugPrint('Deleting transaction failed: $error');
-      _showMessage(_friendlyTransactionError(error));
+      _showMessage('Could not delete the transaction.');
     }
-  }
-
-  String _friendlyTransactionError(Object error) {
-    final message = error.toString();
-
-    if (message.contains('closed month') ||
-        message.contains('already closed') ||
-        message.contains('rollover records')) {
-      return message.replaceFirst('Bad state: ', '');
-    }
-
-    if (message.contains('Insufficient')) {
-      return message.replaceFirst('Bad state: ', '');
-    }
-
-    return 'Could not update this transaction.';
   }
 
   @override
@@ -328,11 +228,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final muted = _mutedColor;
-
     if (_isLoading) {
       return Center(child: CircularProgressIndicator(color: colors.primary));
     }
-
     if (_loadError != null) {
       return Center(
         child: Padding(
@@ -357,9 +255,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       );
     }
-
-    final recent = [...transactions]..sort((a, b) => b.date.compareTo(a.date));
-
+    final recent =
+        transactions.where((transaction) => !transaction.isUdhaar).toList()
+          ..sort((a, b) => b.date.compareTo(a.date));
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 12, 18, 28),
       children: [
@@ -377,7 +275,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
         const SizedBox(height: 20),
-
+        // Total, Cash and Online balances.
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
@@ -392,7 +290,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'AVAILABLE BALANCE',
+                'TOTAL BALANCE',
                 style: TextStyle(
                   color: Color(0xFFD0F6E8),
                   fontSize: 11,
@@ -418,7 +316,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Expanded(
                     child: _AccountBalance(
-                      title: 'Cash Available',
+                      title: 'Cash Balance',
                       amount: cashBalance,
                       icon: Icons.payments_outlined,
                     ),
@@ -426,7 +324,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: _AccountBalance(
-                      title: 'Online Available',
+                      title: 'Online Balance',
                       amount: onlineBalance,
                       icon: Icons.account_balance_wallet_outlined,
                     ),
@@ -440,7 +338,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Expanded(
                     child: _IncomeExpenseSummary(
-                      title: 'Income This Month',
+                      title: 'Income',
                       amount: money(totalIncome),
                       icon: Icons.south_west_rounded,
                     ),
@@ -448,7 +346,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: _IncomeExpenseSummary(
-                      title: 'Expenses This Month',
+                      title: 'Expenses',
                       amount: money(totalExpenses),
                       icon: Icons.north_east_rounded,
                     ),
@@ -458,9 +356,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ],
           ),
         ),
-
         const SizedBox(height: 18),
-
         Row(
           children: [
             Expanded(
@@ -484,9 +380,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
-
         const SizedBox(height: 10),
-
         OutlinedButton.icon(
           onPressed: openCategoryManager,
           icon: const Icon(Icons.category_outlined),
@@ -495,9 +389,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.symmetric(vertical: 14),
           ),
         ),
-
         const SizedBox(height: 24),
-
         Row(
           children: [
             Expanded(
@@ -513,9 +405,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text('Latest 5', style: TextStyle(color: muted, fontSize: 12)),
           ],
         ),
-
         const SizedBox(height: 12),
-
         if (recent.isEmpty)
           Card(
             child: Padding(
@@ -531,9 +421,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           )
         else
           ...recent.take(5).map(transactionTile),
-
         const SizedBox(height: 10),
-
+        // Opens the complete transaction history page.
         OutlinedButton.icon(
           onPressed: widget.onSeeAllTransactions,
           icon: const Icon(Icons.receipt_long_rounded),
@@ -555,7 +444,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final colors = Theme.of(context).colorScheme;
     final muted = _mutedColor;
     final isIncome = transaction.isIncome;
-
     return Card(
       color: colors.surface,
       margin: const EdgeInsets.only(bottom: 10),
@@ -671,8 +559,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return Icons.receipt_long_rounded;
       case 'education':
         return Icons.school_outlined;
-      case 'savings':
-        return Icons.savings_outlined;
       default:
         return Icons.category_outlined;
     }
@@ -684,84 +570,64 @@ class _TransactionFormDialog extends StatefulWidget {
   final bool isIncome;
   final Transaction? transaction;
   final Future<void> Function() onManageCategories;
-
   const _TransactionFormDialog({
     required this.categories,
     required this.onManageCategories,
     this.isIncome = false,
     this.transaction,
   });
-
   @override
   State<_TransactionFormDialog> createState() => _TransactionFormDialogState();
 }
 
 class _TransactionFormDialogState extends State<_TransactionFormDialog> {
   final _formKey = GlobalKey<FormState>();
-
   late final TextEditingController _amountController;
   late final TextEditingController _noteController;
   late final TextEditingController _customCategoryController;
-
   late String _selectedCategory;
   late String _paymentMode;
   late DateTime _selectedDate;
   late bool _isIncome;
-
   bool get _isEditing => widget.transaction != null;
-
   @override
   void initState() {
     super.initState();
-
     final existing = widget.transaction;
-
     _isIncome = existing?.isIncome ?? widget.isIncome;
-
     _amountController = TextEditingController(
       text: existing == null ? '' : existing.amount.toString(),
     );
-
     _noteController = TextEditingController(
       text: existing == null || existing.title == existing.category
           ? ''
           : existing.title,
     );
-
     _paymentMode = existing?.paymentMode ?? 'Cash';
     _selectedDate = existing?.date ?? DateTime.now();
-
     final availableCategories = widget.categories
-        .where((category) => category.toLowerCase() != 'income')
+        .where((category) => category != 'Income')
         .toList();
-
     if (!availableCategories.contains('Other')) {
       availableCategories.add('Other');
     }
-
     final currentCategory = existing?.category;
-
     if (currentCategory != null &&
         availableCategories.contains(currentCategory)) {
       _selectedCategory = currentCategory;
     } else if (currentCategory != null && !_isIncome) {
-      // Savings is a system category and isn't added to normal
-      // user-managed expense categories.
       _selectedCategory = 'Other';
     } else if (availableCategories.isNotEmpty) {
       _selectedCategory = availableCategories.first;
     } else {
       _selectedCategory = 'Other';
     }
-
     final customName =
         existing != null &&
             !_isIncome &&
-            !widget.categories.contains(existing.category) &&
-            existing.category.toLowerCase() != 'savings'
+            !widget.categories.contains(existing.category)
         ? existing.category
         : '';
-
     _customCategoryController = TextEditingController(text: customName);
   }
 
@@ -775,16 +641,14 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
 
   Future<void> _manageCategories() async {
     await widget.onManageCategories();
-
     if (!mounted) return;
-
     setState(() {
       final available = widget.categories
-          .where((category) => category.toLowerCase() != 'income')
+          .where((category) => category != 'Income')
           .toList();
-
-      if (!available.contains('Other')) available.add('Other');
-
+      if (!available.contains('Other')) {
+        available.add('Other');
+      }
       if (!available.contains(_selectedCategory)) {
         _selectedCategory = available.isNotEmpty ? available.first : 'Other';
       }
@@ -798,26 +662,24 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
       firstDate: DateTime(2000),
       lastDate: DateTime.now(),
     );
-
     if (picked != null && mounted) {
-      setState(() => _selectedDate = picked);
+      setState(() {
+        _selectedDate = picked;
+      });
     }
   }
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-
     final amount = double.parse(_amountController.text.trim());
-
-    final finalCategory = _isIncome
-        ? 'Income'
-        : _selectedCategory == 'Other'
-        ? _customCategoryController.text.trim()
-        : _selectedCategory;
-
+    String finalCategory = 'Income';
+    if (!_isIncome) {
+      finalCategory = _selectedCategory == 'Other'
+          ? _customCategoryController.text.trim()
+          : _selectedCategory;
+    }
     final note = _noteController.text.trim();
     final previous = widget.transaction;
-
     Navigator.of(context).pop(
       Transaction(
         id: previous?.id,
@@ -837,18 +699,12 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
     final muted = Theme.of(context).brightness == Brightness.dark
         ? appMuted
         : const Color(0xFF64748B);
-
     final availableCategories = widget.categories
-        .where((category) => category.toLowerCase() != 'income')
+        .where((category) => category != 'Income')
         .toList();
-
     if (!availableCategories.contains('Other')) {
       availableCategories.add('Other');
     }
-
-    final isSavingsTransfer =
-        widget.transaction?.category.toLowerCase() == 'savings';
-
     return AlertDialog(
       title: Row(
         children: [
@@ -860,11 +716,7 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
               borderRadius: BorderRadius.circular(13),
             ),
             child: Icon(
-              isSavingsTransfer
-                  ? Icons.savings_outlined
-                  : _isIncome
-                  ? Icons.south_west_rounded
-                  : Icons.north_east_rounded,
+              _isIncome ? Icons.south_west_rounded : Icons.north_east_rounded,
               color: colors.primary,
             ),
           ),
@@ -872,11 +724,7 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
           Expanded(
             child: Text(
               _isEditing
-                  ? (isSavingsTransfer
-                        ? 'Edit Savings Transfer'
-                        : _isIncome
-                        ? 'Edit Income'
-                        : 'Edit Expense')
+                  ? (_isIncome ? 'Edit Income' : 'Edit Expense')
                   : (_isIncome ? 'Add Income' : 'Add Expense'),
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
@@ -892,19 +740,6 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (isSavingsTransfer) ...[
-                  Text(
-                    'This transaction is linked to Savings. '
-                    'Changing its amount or payment method will '
-                    'update the linked savings record too.',
-                    style: TextStyle(
-                      color: colors.onSurface.withValues(alpha: 0.7),
-                      fontSize: 12,
-                      height: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                ],
                 Text(
                   'TRANSACTION DETAILS',
                   style: TextStyle(
@@ -927,15 +762,13 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                   ),
                   validator: (value) {
                     final amount = double.tryParse(value?.trim() ?? '');
-
                     if (amount == null || !amount.isFinite || amount <= 0) {
                       return 'Enter an amount greater than zero';
                     }
-
                     return null;
                   },
                 ),
-                if (!_isIncome && !isSavingsTransfer) ...[
+                if (!_isIncome) ...[
                   const SizedBox(height: 14),
                   DropdownButtonFormField<String>(
                     initialValue:
@@ -955,10 +788,8 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                     }).toList(),
                     onChanged: (value) {
                       if (value == null) return;
-
                       setState(() {
                         _selectedCategory = value;
-
                         if (value != 'Other') {
                           _customCategoryController.clear();
                         }
@@ -1012,7 +843,7 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                     prefixIcon: Icon(Icons.account_balance_wallet_outlined),
                   ),
                   items: const [
-                    DropdownMenuItem(
+                    DropdownMenuItem<String>(
                       value: 'Cash',
                       child: Row(
                         children: [
@@ -1022,7 +853,7 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                         ],
                       ),
                     ),
-                    DropdownMenuItem(
+                    DropdownMenuItem<String>(
                       value: 'Online',
                       child: Row(
                         children: [
@@ -1035,7 +866,9 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                   ],
                   onChanged: (value) {
                     if (value == null) return;
-                    setState(() => _paymentMode = value);
+                    setState(() {
+                      _paymentMode = value;
+                    });
                   },
                 ),
                 const SizedBox(height: 14),
@@ -1084,7 +917,11 @@ class _TransactionFormDialogState extends State<_TransactionFormDialog> {
                 ? Icons.add_circle_outline_rounded
                 : Icons.check_circle_outline_rounded,
           ),
-          label: Text(_isEditing ? 'Save Changes' : 'Save Transaction'),
+          label: Text(
+            _isEditing
+                ? 'Save Changes'
+                : (_isIncome ? 'Save Income' : 'Save Expense'),
+          ),
         ),
       ],
     );
@@ -1095,17 +932,14 @@ class _AccountBalance extends StatelessWidget {
   final String title;
   final double amount;
   final IconData icon;
-
   const _AccountBalance({
     required this.title,
     required this.amount,
     required this.icon,
   });
-
   @override
   Widget build(BuildContext context) {
     final amountColor = amount < 0 ? const Color(0xFFFFC2C8) : Colors.white;
-
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1151,13 +985,11 @@ class _IncomeExpenseSummary extends StatelessWidget {
   final String title;
   final String amount;
   final IconData icon;
-
   const _IncomeExpenseSummary({
     required this.title,
     required this.amount,
     required this.icon,
   });
-
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -1197,7 +1029,6 @@ class _QuickAction extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-
   const _QuickAction({
     required this.label,
     required this.subtitle,
@@ -1205,11 +1036,9 @@ class _QuickAction extends StatelessWidget {
     required this.color,
     required this.onTap,
   });
-
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-
     return Card(
       color: colors.surface,
       child: InkWell(

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../../models/savings_entry.dart';
 import '../../models/savings_goal.dart';
 import '../../services/database_service.dart';
@@ -7,39 +6,39 @@ import '../../services/notification_service.dart';
 
 class SavingsAccountsScreen extends StatefulWidget {
   const SavingsAccountsScreen({super.key});
-
   @override
   State<SavingsAccountsScreen> createState() => _SavingsAccountsScreenState();
 }
 
 class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
   final DatabaseService _database = DatabaseService.instance;
-
   List<SavingsEntry> _entries = [];
   List<SavingsGoal> _goals = [];
-
   double _cashAvailable = 0;
   double _onlineAvailable = 0;
-
   bool _isLoading = true;
   String? _loadError;
-
   double get _cashSavings => _entries
       .where((entry) => entry.paymentMode == 'Cash')
-      .fold(0.0, (sum, entry) => sum + entry.amount);
-
+      .fold(0.0, (sum, entry) => sum + entry.signedAmount);
   double get _onlineSavings => _entries
       .where((entry) => entry.paymentMode == 'Online')
-      .fold(0.0, (sum, entry) => sum + entry.amount);
-
+      .fold(0.0, (sum, entry) => sum + entry.signedAmount);
   double get _totalSavings => _cashSavings + _onlineSavings;
-
   String _money(double amount) => '₹ ${amount.toStringAsFixed(2)}';
-
   String _dateLabel(DateTime date) => '${date.day}/${date.month}/${date.year}';
-
-  String _entryTypeLabel(String type) {
-    switch (type) {
+  String _entryTypeLabel(SavingsEntry entry) {
+    switch (entry.movementType) {
+      case 'loan_given':
+        return 'Udhaar given from Savings';
+      case 'loan_received':
+        return 'Borrowed money added to Savings';
+      case 'loan_collected':
+        return 'Udhaar repayment received';
+      case 'loan_repaid':
+        return 'Udhaar repayment from Savings';
+    }
+    switch (entry.entryType) {
       case 'existing':
         return 'Existing savings';
       case 'transfer':
@@ -51,8 +50,16 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
     }
   }
 
-  IconData _entryTypeIcon(String type) {
-    switch (type) {
+  IconData _entryTypeIcon(SavingsEntry entry) {
+    switch (entry.movementType) {
+      case 'loan_given':
+      case 'loan_repaid':
+        return Icons.call_made_rounded;
+      case 'loan_received':
+      case 'loan_collected':
+        return Icons.call_received_rounded;
+    }
+    switch (entry.entryType) {
       case 'existing':
         return Icons.savings_outlined;
       case 'transfer':
@@ -77,29 +84,22 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
         _loadError = null;
       });
     }
-
     try {
       await _database.initialize();
-
       final entries = await _database.getSavingsEntries();
       final goals = await _database.getSavingsGoals();
-
       final now = DateTime.now();
-
       final cashAvailable = await _database.getMonthlyAvailableBalance(
         paymentMode: 'Cash',
         month: now.month,
         year: now.year,
       );
-
       final onlineAvailable = await _database.getMonthlyAvailableBalance(
         paymentMode: 'Online',
         month: now.month,
         year: now.year,
       );
-
       if (!mounted) return;
-
       setState(() {
         _entries = entries;
         _goals = goals;
@@ -110,9 +110,7 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
       });
     } catch (error) {
       debugPrint('Failed to load savings: $error');
-
       if (!mounted) return;
-
       setState(() {
         _isLoading = false;
         _loadError = 'Could not load savings. Please try again.';
@@ -122,7 +120,6 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
-
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
@@ -137,17 +134,13 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
 
   Future<void> _notifyNewlyCompletedGoals(Map<int, SavingsGoal> before) async {
     final afterGoals = await _database.getSavingsGoals();
-
     for (final goal in afterGoals) {
       final id = goal.id;
       if (id == null) continue;
-
       final previous = before[id];
       if (previous == null) continue;
-
       final wasComplete = previous.savedAmount >= previous.targetAmount;
       final isComplete = goal.savedAmount >= goal.targetAmount;
-
       if (!wasComplete && isComplete) {
         await NotificationService.instance.showGoalCompleted(
           goalId: id,
@@ -158,23 +151,20 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
   }
 
   bool _canManageEntry(SavingsEntry entry) {
+    if (entry.isUdhaarMovement) return false;
     if (entry.entryType == 'rollover') return false;
-
     // Once the month is closed, transfer records are historical.
     if (entry.entryType == 'transfer') {
       final now = DateTime.now();
-
       if (entry.month != now.month || entry.year != now.year) {
         return false;
       }
     }
-
     return true;
   }
 
   Future<void> _openEntryDialog({SavingsEntry? existing}) async {
     // final now = DateTime.now();
-
     final entry = await showDialog<SavingsEntry>(
       context: context,
       builder: (_) => _SavingsEntryDialog(
@@ -184,12 +174,9 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
         existing: existing,
       ),
     );
-
     if (entry == null || !mounted) return;
-
     try {
       final before = _goalSnapshot();
-
       if (existing == null) {
         await _database.addSavingsEntry(
           amount: entry.amount,
@@ -203,10 +190,8 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
       } else {
         await _database.updateSavingsEntry(entry);
       }
-
       await _notifyNewlyCompletedGoals(before);
       await _loadData();
-
       _showMessage(
         existing == null
             ? 'Savings added successfully.'
@@ -223,12 +208,14 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
       _showMessage('Could not identify this savings entry.');
       return;
     }
-
     if (!_canManageEntry(entry)) {
-      _showMessage('Closed-month rollover and transfer records are protected.');
+      _showMessage(
+        entry.isUdhaarMovement
+            ? 'Manage this linked entry from the Udhaar section.'
+            : 'Closed-month rollover and transfer records are protected.',
+      );
       return;
     }
-
     final confirm = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -255,17 +242,12 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
         ],
       ),
     );
-
     if (confirm != true || !mounted) return;
-
     try {
       final before = _goalSnapshot();
-
       await _database.deleteSavingsEntry(entry.id!);
-
       await _notifyNewlyCompletedGoals(before);
       await _loadData();
-
       _showMessage('Savings entry deleted.');
     } catch (error) {
       debugPrint('Deleting savings entry failed: $error');
@@ -275,32 +257,26 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
 
   String _friendlyError(Object error) {
     final message = error.toString();
-
     if (message.contains('Insufficient')) {
       return message.replaceFirst('Bad state: ', '');
     }
-
     if (message.contains('closed month') ||
         message.contains('already closed') ||
         message.contains('rollover records')) {
       return message.replaceFirst('Bad state: ', '');
     }
-
     if (error is ArgumentError) {
       return error.message?.toString() ?? 'Invalid savings details.';
     }
-
     return 'Could not complete this savings operation.';
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-
     if (_isLoading) {
       return Center(child: CircularProgressIndicator(color: colors.primary));
     }
-
     if (_loadError != null) {
       return Center(
         child: Padding(
@@ -321,7 +297,6 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
         ),
       );
     }
-
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView(
@@ -335,7 +310,6 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
             ),
           ),
           const SizedBox(height: 18),
-
           Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
@@ -396,9 +370,7 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 18),
-
           FilledButton.icon(
             onPressed: () => _openEntryDialog(),
             icon: const Icon(Icons.add_rounded),
@@ -410,9 +382,7 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
               ),
             ),
           ),
-
           const SizedBox(height: 24),
-
           Text(
             'Savings Activity',
             style: TextStyle(
@@ -432,7 +402,6 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
             ),
           ),
           const SizedBox(height: 12),
-
           if (_entries.isEmpty)
             Card(
               child: Padding(
@@ -470,7 +439,7 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
           else
             ..._entries.map((entry) {
               final canManage = _canManageEntry(entry);
-
+              final reducesSavings = entry.reducesSavings;
               return Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: ListTile(
@@ -481,15 +450,13 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
                   leading: CircleAvatar(
                     backgroundColor: colors.primary.withValues(alpha: 0.12),
                     child: Icon(
-                      _entryTypeIcon(entry.entryType),
+                      _entryTypeIcon(entry),
                       color: colors.primary,
                       size: 21,
                     ),
                   ),
                   title: Text(
-                    entry.note.isEmpty
-                        ? _entryTypeLabel(entry.entryType)
-                        : entry.note,
+                    entry.note.isEmpty ? _entryTypeLabel(entry) : entry.note,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -500,7 +467,7 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
                   subtitle: Padding(
                     padding: const EdgeInsets.only(top: 5),
                     child: Text(
-                      '${_entryTypeLabel(entry.entryType)} • '
+                      '${_entryTypeLabel(entry)} • '
                       '${entry.paymentMode} • '
                       '${_dateLabel(entry.createdAt)}'
                       '${entry.goalId != null ? ' • Goal linked' : ''}',
@@ -519,9 +486,11 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
                             child: Text(
-                              '+${_money(entry.amount)}',
+                              '${reducesSavings ? '-' : '+'}${_money(entry.amount)}',
                               style: TextStyle(
-                                color: colors.primary,
+                                color: reducesSavings
+                                    ? colors.error
+                                    : colors.primary,
                                 fontWeight: FontWeight.w800,
                                 fontSize: 12,
                               ),
@@ -579,13 +548,11 @@ class _SavingsAccountsScreenState extends State<SavingsAccountsScreen> {
                 ),
               );
             }),
-
           const SizedBox(height: 12),
-
           Text(
-            'Existing savings never change available balance. '
-            'Transfers and month-end rollovers have linked transaction '
-            'records. Closed-month rollover entries are read-only.',
+            'Existing savings never change wallet balance. Udhaar movements '
+            'are linked to the Udhaar ledger and must be edited there. '
+            'Closed-month rollover entries are read-only.',
             style: TextStyle(
               color: colors.onSurface.withValues(alpha: 0.55),
               fontSize: 11,
@@ -602,13 +569,11 @@ class _SavingsAccountCard extends StatelessWidget {
   final String title;
   final String amount;
   final IconData icon;
-
   const _SavingsAccountCard({
     required this.title,
     required this.amount,
     required this.icon,
   });
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -651,36 +616,28 @@ class _SavingsEntryDialog extends StatefulWidget {
   final double cashAvailable;
   final double onlineAvailable;
   final SavingsEntry? existing;
-
   const _SavingsEntryDialog({
     required this.goals,
     required this.cashAvailable,
     required this.onlineAvailable,
     this.existing,
   });
-
   @override
   State<_SavingsEntryDialog> createState() => _SavingsEntryDialogState();
 }
 
 class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
   final _formKey = GlobalKey<FormState>();
-
   late final TextEditingController _amountController;
   late final TextEditingController _noteController;
-
   late String _entryType;
   late String _paymentMode;
   late int? _goalId;
-
   bool get _isEditing => widget.existing != null;
-
   bool get _allowTransfer {
     if (!_isEditing) return true;
-
     final old = widget.existing!;
     final now = DateTime.now();
-
     return old.month == now.month && old.year == now.year;
   }
 
@@ -688,9 +645,7 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
     var available = _paymentMode == 'Cash'
         ? widget.cashAvailable
         : widget.onlineAvailable;
-
     final old = widget.existing;
-
     // When editing a transfer, add its original amount back to
     // the displayed available amount if the payment mode is unchanged.
     if (old != null &&
@@ -698,36 +653,28 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
         old.paymentMode == _paymentMode) {
       available += old.amount;
     }
-
     return available;
   }
 
   @override
   void initState() {
     super.initState();
-
     final old = widget.existing;
     final now = DateTime.now();
-
     _entryType = old?.entryType ?? 'existing';
     _paymentMode = old?.paymentMode ?? 'Cash';
     _goalId = old?.goalId;
-
     _amountController = TextEditingController(
       text: old == null ? '' : old.amount.toStringAsFixed(2),
     );
-
     _noteController = TextEditingController(text: old?.note ?? '');
-
     // A previously linked goal may have since been deleted.
     if (_goalId != null && !widget.goals.any((goal) => goal.id == _goalId)) {
       _goalId = null;
     }
-
     if (old == null) {
       _entryType = 'existing';
     }
-
     // Avoid unused local warnings while documenting the selected month.
     assert(now.month >= 1 && now.month <= 12);
   }
@@ -741,16 +688,12 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-
     final old = widget.existing;
     final now = DateTime.now();
-
     final month = _entryType == 'transfer'
         ? now.month
         : old?.month ?? now.month;
-
     final year = _entryType == 'transfer' ? now.year : old?.year ?? now.year;
-
     Navigator.of(context).pop(
       SavingsEntry(
         id: old?.id,
@@ -771,14 +714,12 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     // final old = widget.existing;
-
     final remainingItems = <DropdownMenuItem<String>>[
       const DropdownMenuItem(
         value: 'existing',
         child: Text('Add existing savings'),
       ),
     ];
-
     if (_allowTransfer) {
       remainingItems.add(
         const DropdownMenuItem(
@@ -787,11 +728,9 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
         ),
       );
     }
-
     if (!remainingItems.any((item) => item.value == _entryType)) {
       _entryType = 'existing';
     }
-
     final goalItems = <DropdownMenuItem<int>>[
       const DropdownMenuItem<int>(value: 0, child: Text('No goal')),
       ...widget.goals
@@ -803,7 +742,6 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
             ),
           ),
     ];
-
     return AlertDialog(
       title: Text(_isEditing ? 'Edit Savings' : 'Add Savings'),
       content: SizedBox(
@@ -825,15 +763,12 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                   items: remainingItems,
                   onChanged: (value) {
                     if (value == null) return;
-
                     setState(() {
                       _entryType = value;
                     });
                   },
                 ),
-
                 const SizedBox(height: 14),
-
                 DropdownButtonFormField<String>(
                   initialValue: _paymentMode,
                   isExpanded: true,
@@ -847,13 +782,11 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                   ],
                   onChanged: (value) {
                     if (value == null) return;
-
                     setState(() {
                       _paymentMode = value;
                     });
                   },
                 ),
-
                 if (_entryType == 'transfer') ...[
                   const SizedBox(height: 12),
                   Container(
@@ -873,9 +806,7 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                     ),
                   ),
                 ],
-
                 const SizedBox(height: 14),
-
                 DropdownButtonFormField<int>(
                   initialValue: _goalId ?? 0,
                   isExpanded: true,
@@ -890,9 +821,7 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                     });
                   },
                 ),
-
                 const SizedBox(height: 14),
-
                 TextFormField(
                   controller: _amountController,
                   autofocus: !_isEditing,
@@ -906,26 +835,20 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                   ),
                   validator: (value) {
                     final amount = double.tryParse(value?.trim() ?? '');
-
                     if (amount == null || !amount.isFinite || amount <= 0) {
                       return 'Enter an amount greater than zero';
                     }
-
                     if (_entryType == 'transfer' &&
                         amount > _selectedAvailable + 0.000001) {
                       return 'Amount exceeds available balance';
                     }
-
                     if (_entryType == 'transfer' && _selectedAvailable <= 0) {
                       return 'No available balance to transfer';
                     }
-
                     return null;
                   },
                 ),
-
                 const SizedBox(height: 14),
-
                 TextFormField(
                   controller: _noteController,
                   textCapitalization: TextCapitalization.sentences,
@@ -935,9 +858,7 @@ class _SavingsEntryDialogState extends State<_SavingsEntryDialog> {
                     prefixIcon: Icon(Icons.notes_rounded),
                   ),
                 ),
-
                 const SizedBox(height: 12),
-
                 Text(
                   _entryType == 'transfer'
                       ? 'A transfer reduces available balance, creates a '

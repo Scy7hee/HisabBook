@@ -5,6 +5,7 @@ class SavingsEntry {
   final double amount;
   final String paymentMode;
   final String entryType;
+  final String movementType;
   final int month;
   final int year;
   final String note;
@@ -17,9 +18,10 @@ class SavingsEntry {
     required this.amount,
     required this.paymentMode,
     required this.entryType,
+    this.movementType = 'deposit',
     required this.month,
     required this.year,
-    required this.note,
+    this.note = '',
     required this.createdAt,
   });
 
@@ -29,8 +31,9 @@ class SavingsEntry {
       transactionId: map['transactionId'] as int?,
       goalId: map['goalId'] as int?,
       amount: (map['amount'] as num).toDouble(),
-      paymentMode: map['paymentMode'] as String,
-      entryType: map['entryType'] as String,
+      paymentMode: map['paymentMode'] as String? ?? 'Cash',
+      entryType: map['entryType'] as String? ?? 'existing',
+      movementType: map['movementType'] as String? ?? 'deposit',
       month: map['month'] as int,
       year: map['year'] as int,
       note: map['note'] as String? ?? '',
@@ -40,15 +43,28 @@ class SavingsEntry {
 
   Map<String, Object?> toMap() {
     return {
+      'id': id,
       'transactionId': transactionId,
       'goalId': goalId,
       'amount': amount,
       'paymentMode': paymentMode,
       'entryType': entryType,
+      'movementType': movementType,
       'month': month,
       'year': year,
       'note': note,
       'createdAt': createdAt.toIso8601String(),
     };
   }
+
+  bool get reducesSavings =>
+      movementType == 'loan_given' || movementType == 'loan_repaid';
+
+  bool get isUdhaarMovement =>
+      movementType == 'loan_given' ||
+      movementType == 'loan_received' ||
+      movementType == 'loan_collected' ||
+      movementType == 'loan_repaid';
+
+  double get signedAmount => reducesSavings ? -amount : amount;
 }
